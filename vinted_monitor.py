@@ -10,6 +10,9 @@ Environment variables (shared with the main monitor where applicable):
   DISCORD_WEBHOOK_URL       — Discord webhook for notifications
   DATABASE_PATH             — SQLite path (default: ebay_monitor.db)
   VINTED_POLL_DELAY         — seconds between polls (default: 3, min: 0)
+  PROXY_URL                 — HTTP or SOCKS5 proxy for Vinted requests
+                              e.g. http://user:pass@host:port
+                                   socks5://user:pass@host:port
   NOTIFY_EXISTING           — notify on listings already seen at startup
   NOTIFY_PRICE_INCREASES    — notify on price increases (default: false)
   INCLUDE_KEYWORDS          — comma-separated keyword filter
@@ -23,7 +26,6 @@ from __future__ import annotations
 import logging
 import os
 import time
-from decimal import Decimal
 from pathlib import Path
 
 import requests
@@ -42,6 +44,23 @@ from storage import MonitorStore
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_POLL_DELAY = 3.0
+
+_ALLOWED_PROXY_SCHEMES = ("http", "https", "socks5", "socks5h")
+
+
+def _parse_proxy(raw: str) -> str:
+    """Validate and normalise a proxy URL; raise ValueError on bad input."""
+    from urllib.parse import urlparse
+    parsed = urlparse(raw)
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in _ALLOWED_PROXY_SCHEMES:
+        raise ValueError(
+            f"PROXY_URL scheme '{scheme}' not supported. "
+            f"Use one of: {', '.join(_ALLOWED_PROXY_SCHEMES)}"
+        )
+    if not parsed.hostname:
+        raise ValueError("PROXY_URL has no hostname")
+    return raw
 
 
 def run(once: bool = False) -> None:
@@ -63,6 +82,12 @@ def run(once: bool = False) -> None:
             "DISCORD_WEBHOOK_URL", webhook, ("discord.com", "discordapp.com")
         )
 
+    proxy: str | None = None
+    raw_proxy = os.getenv("PROXY_URL")
+    if raw_proxy:
+        proxy = _parse_proxy(raw_proxy.strip())
+        LOGGER.info("Proxy enabled: %s", raw_proxy.split("@")[-1])  # hide credentials
+
     poll_delay = float(os.getenv("VINTED_POLL_DELAY", str(DEFAULT_POLL_DELAY)))
     if poll_delay < 0:
         poll_delay = 0.0
@@ -81,9 +106,10 @@ def run(once: bool = False) -> None:
     notify_price_increases = bool_env("NOTIFY_PRICE_INCREASES")
 
     LOGGER.info(
-        "Vinted zero-delay monitor started | urls=%d poll_delay=%.1fs",
+        "Vinted monitor started | urls=%d poll_delay=%.1fs proxy=%s",
         len(vinted_urls),
         poll_delay,
+        "yes" if proxy else "no",
     )
 
     initial_scan = True
@@ -95,7 +121,7 @@ def run(once: bool = False) -> None:
                 for url in vinted_urls:
                     try:
                         fetched = fetch_vinted_listings_api(
-                            url, timeout=DEFAULT_TIMEOUT_SECONDS
+                            url, timeout=DEFAULT_TIMEOUT_SECONDS, proxy=proxy
                         )
                         filtered = [l for l in fetched if listing_filter.matches(l)]
                         all_listings.extend(filtered)

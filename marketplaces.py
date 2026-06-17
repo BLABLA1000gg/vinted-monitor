@@ -183,12 +183,24 @@ _VINTED_API_HEADERS = {
 }
 
 
-def _vinted_session(timeout: int = 15) -> "CurlSession":
+def _vinted_session(timeout: int = 15, proxy: str | None = None) -> "CurlSession":
     """Return the shared Vinted curl_cffi session, performing the anonymous
-    cookie handshake (homepage GET) on first use. Thread-safe."""
+    cookie handshake (homepage GET) on first use. Thread-safe.
+
+    When *proxy* is supplied a fresh (non-shared) session is returned so the
+    global session is not polluted with proxy settings.  Supports HTTP and
+    SOCKS5 proxy URLs, e.g.:
+        http://user:pass@host:port
+        socks5://user:pass@host:port
+    """
     global _VINTED_CURL_SESSION
     if not _CURL_CFFI_AVAILABLE:
         raise RuntimeError("curl_cffi is required for the Vinted API")
+    if proxy:
+        # Non-shared session — one per caller, not stored globally.
+        session = CurlSession(impersonate="chrome120", proxies={"https": proxy, "http": proxy})
+        session.get(f"{VINTED_API_BASE}/", timeout=timeout)
+        return session
     with _VINTED_CURL_SESSION_LOCK:
         if _VINTED_CURL_SESSION is None:
             session = CurlSession(impersonate="chrome120")
@@ -205,17 +217,18 @@ def _vinted_reset_session() -> None:
         _VINTED_CURL_SESSION = None
 
 
-def vinted_api_get(path: str, params: dict | None = None, timeout: int = 15):
+def vinted_api_get(path: str, params: dict | None = None, timeout: int = 15, proxy: str | None = None):
     """GET a Vinted /api/v2/... path with the shared anonymous session.
     Refreshes the cookie handshake once on 401."""
-    session = _vinted_session(timeout)
+    session = _vinted_session(timeout, proxy=proxy)
     response = session.get(
         f"{VINTED_API_BASE}{path}", params=params,
         headers=_VINTED_API_HEADERS, timeout=timeout,
     )
     if response.status_code == 401:
-        _vinted_reset_session()
-        session = _vinted_session(timeout)
+        if not proxy:
+            _vinted_reset_session()
+        session = _vinted_session(timeout, proxy=proxy)
         response = session.get(
             f"{VINTED_API_BASE}{path}", params=params,
             headers=_VINTED_API_HEADERS, timeout=timeout,
@@ -223,13 +236,17 @@ def vinted_api_get(path: str, params: dict | None = None, timeout: int = 15):
     return response
 
 
-def fetch_vinted_listings_api(url: str, timeout: int = 15) -> list[Listing]:
+def fetch_vinted_listings_api(url: str, timeout: int = 15, proxy: str | None = None) -> list[Listing]:
     """Fetch Vinted catalog results via the JSON API.
 
     Translates a user-configured catalog URL (e.g.
     https://www.vinted.de/catalog?search_text=iphone+13+pro) into a
     /api/v2/catalog/items query and maps the JSON items onto Listing objects
     with the same shape parse_vinted_listings() produces.
+
+    *proxy* accepts HTTP or SOCKS5 proxy URLs:
+        http://user:pass@host:port
+        socks5://user:pass@host:port
     """
     query = parse_qs(urlparse(url).query)
     params: dict = {"per_page": 96, "page": 1}
@@ -242,7 +259,7 @@ def fetch_vinted_listings_api(url: str, timeout: int = 15) -> list[Listing]:
         if key.endswith("[]") and values:
             params[key] = values
 
-    response = vinted_api_get("/api/v2/catalog/items", params=params, timeout=timeout)
+    response = vinted_api_get("/api/v2/catalog/items", params=params, timeout=timeout, proxy=proxy)
     if response.status_code != 200:
         raise requests.HTTPError(
             f"Vinted API returned HTTP {response.status_code} for catalog query"

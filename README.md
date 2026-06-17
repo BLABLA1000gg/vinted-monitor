@@ -29,6 +29,7 @@ python vinted_monitor.py --once
 | `EBAY_URL` | required | Vinted catalog URL (pipe-separate multiple) |
 | `DISCORD_WEBHOOK_URL` | — | Discord webhook for notifications |
 | `VINTED_POLL_DELAY` | `3` | Seconds between polls (0 = back-to-back) |
+| `PROXY_URL` | — | HTTP or SOCKS5 proxy — `http://user:pass@host:port` or `socks5://user:pass@host:port` |
 | `NOTIFY_EXISTING` | `false` | Notify on listings seen at startup |
 | `NOTIFY_PRICE_INCREASES` | `false` | Notify on price increases |
 | `INCLUDE_KEYWORDS` | — | Comma-separated keyword filter |
